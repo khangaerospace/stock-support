@@ -1,26 +1,67 @@
 """Django Web GUI for Stock Analysis
 
-This module provides a web-based interface for analyzing TSX (Toronto Stock Exchange)
-listed companies using Django framework. The application can be run as a standalone
-script and provides the same functionality as the tkinter GUI but accessible through
-a web browser.
+This module provides a comprehensive web-based interface for analyzing TSX (Toronto Stock Exchange)
+listed companies using the Django web framework. The application is designed as a standalone
+script that can be executed directly without requiring a separate Django project setup.
+
+The web interface mirrors the functionality of the tkinter GUI (stock_gui.py) but provides
+a more modern, accessible, and mobile-friendly experience through a web browser.
+
+Architecture:
+    - Standalone Django application with embedded configuration
+    - Single-file deployment with no external templates or static files
+    - RESTful AJAX endpoints for dynamic data loading
+    - Bootstrap CSS framework for responsive design
+    - jQuery for client-side interactivity and AJAX requests
 
 Features:
-- Web-based stock search and analysis
-- Responsive design with Bootstrap CSS
-- AJAX-powered real-time updates
-- Export functionality for TSX symbols
-- Mobile-friendly interface
+    - Real-time stock analysis with loading indicators
+    - Responsive web design optimized for desktop and mobile devices
+    - Four organized data sections: Company Info, Market & Valuation, Financial Performance, Analysis
+    - Quick access buttons for popular TSX stocks (CEU.TO, CCO.TO, TSAT.TO)
+    - Excel export functionality for complete TSX symbol lists
+    - Error handling with user-friendly messages
+    - No database required - all data fetched from Yahoo Finance API
+
+Technical Implementation:
+    - Django settings configured programmatically within the module
+    - URL routing defined in the same file for simplicity
+    - CSRF protection disabled for development (not recommended for production)
+    - HTML template embedded as string for self-contained deployment
+    - JavaScript formatting functions for consistent financial data display
+
+Security Considerations:
+    - Uses development-only secret key (change for production)
+    - CSRF middleware not fully implemented (development only)
+    - Allowed hosts restricted to localhost/127.0.0.1
+    - No user authentication or session management
 
 Dependencies:
-    - Django: Web framework for the application
-    - support_handler: Custom module for stock data retrieval
+    - Django>=3.2: Web framework for the application server
+    - support_handler: Custom module containing stock_handler class for data retrieval
+    - yfinance: (indirect) Via support_handler for Yahoo Finance API access
+    - pandas: (indirect) Via support_handler for data manipulation
 
 Usage:
-    Run this file directly to start the Django development server:
-    python stock_web_gui.py
+    Basic usage:
+        python stock_web_gui.py
+        
+    Custom host/port:
+        python stock_web_gui.py runserver 0.0.0.0:8080
+        
+    Then open your browser to: http://127.0.0.1:8000 (or specified host:port)
     
-    Then open your browser to: http://127.0.0.1:8000
+    To stop the server, press Ctrl+C in the terminal.
+
+API Endpoints:
+    GET /: Main interface page with HTML form and results display
+    POST /analyze/: AJAX endpoint for stock analysis (expects 'symbol' parameter)
+    POST /export/: AJAX endpoint for TSX symbol export to Excel
+
+Browser Compatibility:
+    - Modern browsers with JavaScript enabled
+    - Bootstrap 5.1.3 and jQuery 3.6.0 loaded from CDN
+    - Responsive design works on mobile devices
 """
 
 import os
@@ -38,19 +79,32 @@ from django.template import Template, Context
 from support_handler import stock_handler
 
 
-# Configure Django settings
+# Configure Django settings programmatically
+# This allows the application to run as a standalone script without requiring
+# a separate Django project structure or settings.py file
 if not settings.configured:
     settings.configure(
+        # Enable debug mode for development (shows detailed error pages)
         DEBUG=True,
+        
+        # Development-only secret key (NEVER use this in production)
         SECRET_KEY='django-insecure-stock-analyzer-development-key-only',
+        
+        # Point to this module for URL configuration
         ROOT_URLCONF=__name__,
+        
+        # Restrict access to localhost only for security
         ALLOWED_HOSTS=['127.0.0.1', 'localhost'],
+        
+        # Minimal Django apps - only static files support needed
         INSTALLED_APPS=[
             'django.contrib.staticfiles',
         ],
+        
+        # Template configuration (though we use embedded HTML strings)
         TEMPLATES=[{
             'BACKEND': 'django.template.backends.django.DjangoTemplates',
-            'DIRS': [],
+            'DIRS': [],  # No template directories needed
             'APP_DIRS': True,
             'OPTIONS': {
                 'context_processors': [
@@ -59,15 +113,20 @@ if not settings.configured:
                 ],
             },
         }],
+        
+        # Static files configuration (CSS, JS served from CDN)
         STATIC_URL='/static/',
+        
+        # Enable timezone support
         USE_TZ=True,
     )
 
 
-# Initialize Django
+# Initialize Django framework with the configured settings
 django.setup()
 
-# Global stock handler instance
+# Create global stock handler instance for data retrieval
+# This instance is reused across all requests for efficiency
 stock_handler_instance = stock_handler()
 
 
@@ -83,6 +142,8 @@ def index(request):
     Returns:
         HttpResponse: Rendered HTML page
     """
+    # HTML template embedded as string for self-contained deployment
+    # This eliminates the need for separate template files
     html_template = """
     <!DOCTYPE html>
     <html lang="en">
@@ -93,13 +154,29 @@ def index(request):
         <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
         <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
         <style>
-            .stock-info-card { margin-bottom: 20px; }
-            .loading { display: none; }
-            .error-message { color: #dc3545; }
-            .success-message { color: #198754; }
-            .metric-value { font-weight: bold; color: #0d6efd; }
-            .quick-btn { margin: 5px; }
-            #results { display: none; }
+            /* Custom CSS for the stock analyzer interface */
+            .stock-info-card { 
+                margin-bottom: 20px; /* Spacing between result cards */
+            }
+            .loading { 
+                display: none; /* Hidden by default, shown during analysis */
+            }
+            .error-message { 
+                color: #dc3545; /* Bootstrap danger color for errors */
+            }
+            .success-message { 
+                color: #198754; /* Bootstrap success color for confirmations */
+            }
+            .metric-value { 
+                font-weight: bold; 
+                color: #0d6efd; /* Bootstrap primary color for financial values */
+            }
+            .quick-btn { 
+                margin: 5px; /* Spacing around quick access buttons */
+            }
+            #results { 
+                display: none; /* Hidden until first analysis is performed */
+            }
         </style>
     </head>
     <body>
@@ -251,56 +328,79 @@ def index(request):
         </div>
         
         <script>
-            // Stock analysis form handler
+            /* JavaScript functionality for the stock analyzer web interface */
+            
+            // Stock analysis form handler - prevents default form submission
+            // and triggers AJAX-based analysis instead
             $('#stockForm').on('submit', function(e) {
-                e.preventDefault();
+                e.preventDefault(); // Prevent page reload
                 analyzeStock();
             });
             
+            /**
+             * Main function for analyzing a stock symbol via AJAX
+             * Validates input, shows loading state, makes server request, and handles response
+             */
             function analyzeStock() {
                 const symbol = $('#symbol').val().trim();
+                
+                // Input validation
                 if (!symbol) {
                     showMessage('Please enter a stock symbol', 'error');
                     return;
                 }
                 
-                // Show loading state
-                $('#analyzeBtn').prop('disabled', true);
-                $('.loading').show();
-                showMessage('', '');
+                // Update UI to show loading state
+                $('#analyzeBtn').prop('disabled', true);  // Prevent multiple simultaneous requests
+                $('.loading').show();                     // Show spinner and loading text
+                showMessage('', '');                      // Clear any previous messages
                 
-                // Make AJAX request
+                // Make AJAX request to analyze endpoint
                 $.ajax({
                     url: '/analyze/',
                     method: 'POST',
                     data: {
                         'symbol': symbol,
-                        'csrfmiddlewaretoken': '{{ csrf_token }}'
+                        'csrfmiddlewaretoken': '{{ csrf_token }}'  // CSRF protection
                     },
                     success: function(data) {
                         if (data.success) {
+                            // Update the display with received stock data
                             updateDisplay(data.info, symbol);
-                            $('#results').show();
+                            $('#results').show();  // Make results section visible
                             showMessage('Analysis completed successfully!', 'success');
                         } else {
+                            // Server returned an error
                             showMessage('Error: ' + data.error, 'error');
                         }
                     },
                     error: function() {
+                        // AJAX request failed (network error, server down, etc.)
                         showMessage('Failed to analyze stock. Please try again.', 'error');
                     },
                     complete: function() {
-                        $('#analyzeBtn').prop('disabled', false);
-                        $('.loading').hide();
+                        // Always executed after success or error
+                        $('#analyzeBtn').prop('disabled', false);  // Re-enable button
+                        $('.loading').hide();                      // Hide loading spinner
                     }
                 });
             }
             
+            /**
+             * Quick analysis function for predefined stock symbols
+             * Used by the quick access buttons to populate symbol field and trigger analysis
+             * 
+             * @param {string} symbol - The stock symbol to analyze (e.g., 'CEU.TO')
+             */
             function quickAnalyze(symbol) {
-                $('#symbol').val(symbol);
-                analyzeStock();
+                $('#symbol').val(symbol);  // Set the symbol input field
+                analyzeStock();            // Trigger the analysis
             }
             
+            /**
+             * Export all TSX symbols to Excel file
+             * Makes AJAX request to server to generate and save Excel file with current TSX symbols
+             */
             function exportSymbols() {
                 showMessage('Exporting TSX symbols...', 'info');
                 
@@ -308,7 +408,7 @@ def index(request):
                     url: '/export/',
                     method: 'POST',
                     data: {
-                        'csrfmiddlewaretoken': '{{ csrf_token }}'
+                        'csrfmiddlewaretoken': '{{ csrf_token }}'  // CSRF protection
                     },
                     success: function(data) {
                         if (data.success) {
@@ -323,8 +423,16 @@ def index(request):
                 });
             }
             
+            /**
+             * Update the web interface with stock information received from the server
+             * Populates all four main sections: Company Info, Market & Valuation, 
+             * Financial Performance, and Analysis & Recommendations
+             * 
+             * @param {Object} info - Stock information object from yfinance API
+             * @param {string} symbol - The stock symbol that was analyzed
+             */
             function updateDisplay(info, symbol) {
-                // Update company information
+                // Update company information section
                 const companyHtml = `
                     <h6>${info.longName || 'N/A'} (${symbol})</h6>
                     <p><strong>Sector:</strong> ${info.sector || 'N/A'}</p>
@@ -336,7 +444,7 @@ def index(request):
                 `;
                 $('#companyInfo').html(companyHtml);
                 
-                // Update market data
+                // Update market & valuation data
                 $('#marketCap').text(formatNumber(info.marketCap) || 'N/A');
                 $('#currentPrice').text('$' + (formatPrice(info.currentPrice) || 'N/A'));
                 $('#weekHigh').text('$' + (formatPrice(info.fiftyTwoWeekHigh) || 'N/A'));
@@ -346,7 +454,7 @@ def index(request):
                 $('#pbRatio').text(formatRatio(info.priceToBook) || 'N/A');
                 $('#forwardPE').text(formatRatio(info.forwardPE) || 'N/A');
                 
-                // Update financial data
+                // Update financial performance data
                 $('#roe').text(formatPercent(info.returnOnEquity) || 'N/A');
                 $('#roa').text(formatPercent(info.returnOnAssets) || 'N/A');
                 $('#profitMargin').text(formatPercent(info.profitMargins) || 'N/A');
@@ -357,7 +465,7 @@ def index(request):
                 $('#currentRatio').text(formatRatio(info.currentRatio) || 'N/A');
                 $('#debtEquity').text(formatRatio(info.debtToEquity) || 'N/A');
                 
-                // Update analysis data
+                // Update analysis & recommendations data
                 $('#recommendation').text((info.recommendationKey || 'N/A').toUpperCase());
                 $('#targetMean').text('$' + (formatPrice(info.targetMeanPrice) || 'N/A'));
                 $('#targetHigh').text('$' + (formatPrice(info.targetHighPrice) || 'N/A'));
@@ -367,44 +475,86 @@ def index(request):
                 $('#payoutRatio').text(formatPercent(info.payoutRatio) || 'N/A');
             }
             
-            // Formatting functions
+            /* Data formatting functions for consistent display of financial values */
+            
+            /**
+             * Format large monetary values with appropriate unit suffixes
+             * Converts large numbers to readable format with B/M/K suffixes
+             * 
+             * @param {number|null} value - The numerical value to format
+             * @returns {string|null} Formatted string or null if value is invalid
+             */
             function formatNumber(value) {
                 if (!value) return null;
-                if (value >= 1000000000) return '$' + (value/1000000000).toFixed(2) + 'B';
-                if (value >= 1000000) return '$' + (value/1000000).toFixed(2) + 'M';
-                if (value >= 1000) return '$' + (value/1000).toFixed(2) + 'K';
-                return '$' + value.toFixed(2);
+                if (value >= 1000000000) return '$' + (value/1000000000).toFixed(2) + 'B';  // Billions
+                if (value >= 1000000) return '$' + (value/1000000).toFixed(2) + 'M';       // Millions
+                if (value >= 1000) return '$' + (value/1000).toFixed(2) + 'K';             // Thousands
+                return '$' + value.toFixed(2);                                              // Under 1000
             }
             
+            /**
+             * Format price values to two decimal places
+             * Used for stock prices, target prices, dividend rates, etc.
+             * 
+             * @param {number|null} value - The price value to format
+             * @returns {string|null} Price formatted to 2 decimals or null if invalid
+             */
             function formatPrice(value) {
                 if (!value) return null;
                 return value.toFixed(2);
             }
             
+            /**
+             * Format ratio values to two decimal places
+             * Used for financial ratios like P/E, debt-to-equity, current ratio, etc.
+             * 
+             * @param {number|null} value - The ratio value to format
+             * @returns {string|null} Ratio formatted to 2 decimals or null if invalid
+             */
             function formatRatio(value) {
                 if (!value) return null;
                 return value.toFixed(2);
             }
             
+            /**
+             * Format decimal values as percentages
+             * Converts decimal values (e.g., 0.15) to percentage format (e.g., "15.00%")
+             * Used for ROE, ROA, profit margins, dividend yields, etc.
+             * 
+             * @param {number|null} value - The decimal value to convert to percentage
+             * @returns {string|null} Percentage formatted with % symbol or null if invalid
+             */
             function formatPercent(value) {
                 if (!value) return null;
                 return (value * 100).toFixed(2) + '%';
             }
             
+            /**
+             * Display status messages to the user
+             * Shows success, error, or info messages in the designated message area
+             * 
+             * @param {string} message - The message text to display (empty string clears messages)
+             * @param {string} type - Message type: 'success', 'error', 'info', or empty
+             */
             function showMessage(message, type) {
                 const messageDiv = $('#messages');
+                
+                // Clear messages if no message provided
                 if (!message) {
                     messageDiv.html('');
                     return;
                 }
                 
+                // Determine CSS class based on message type
                 let className = '';
                 switch(type) {
-                    case 'success': className = 'success-message'; break;
-                    case 'error': className = 'error-message'; break;
-                    case 'info': className = 'text-info'; break;
+                    case 'success': className = 'success-message'; break;  // Green text
+                    case 'error': className = 'error-message'; break;      // Red text
+                    case 'info': className = 'text-info'; break;           // Blue text
+                    default: className = ''; break;                        // Default styling
                 }
                 
+                // Display the message with appropriate styling
                 messageDiv.html('<div class="' + className + '">' + message + '</div>');
             }
         </script>
